@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es-ES">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' https://mempool.space https://blockstream.info https://blockchain.info https://ethereum-rpc.publicnode.com https://eth.drpc.org https://cloudflare-eth.com https://solana-rpc.publicnode.com https://api.mainnet-beta.solana.com https://api.coingecko.com https://api.coinbase.com https://horosam.com">
+  <meta name="referrer" content="no-referrer">
+  <title>Mis Saldos</title>
+  <meta name="description" content="Panel personal de patrimonio, cifrado y guardado solo en el dispositivo">
+  <meta name="theme-color" content="#f3f1ff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d0b18" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Mis Saldos">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="locked">
+  <div id="app" aria-live="polite"></div>
+  <div id="sheet-root"></div>
+  <div id="toast-root"></div>
+  <div id="privacy-shield" aria-hidden="true"></div>
+  <noscript>Esta aplicación necesita JavaScript activado.</noscript>
+  <script src="js/btc.js"></script>
+  <script src="js/degiro.js"></script>
+  <script src="js/providers.js"></script>
+  <script src="js/vault.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
