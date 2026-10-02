@@ -4,7 +4,7 @@
   "description": "Panel personal de patrimonio, cifrado y guardado solo en el dispositivo",
   "lang": "es-ES",
   "dir": "ltr",
-  "id": "./",
+  "id": "/mis-saldos/app-v2",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
