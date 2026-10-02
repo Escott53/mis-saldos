@@ -1,6 +1,6 @@
 /* Service worker de Mis Saldos.
    IMPORTANTE: incrementa CACHE_VERSION en cada despliegue para que los móviles reciban la nueva versión. */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const CACHE = `mis-saldos-v${CACHE_VERSION}`;
 const ASSETS = [
   './', './index.html', './styles.css', './manifest.json',
