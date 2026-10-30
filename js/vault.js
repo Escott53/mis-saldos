@@ -103,6 +103,10 @@
     if (!dataKey) throw new Error('Bloqueado');
     await put('vault', await seal(dataKey, enc.encode(JSON.stringify(data)), 'vault'));
   }
+  // Documentos adjuntos (PDF, imágenes): cifrados con la misma clave de datos, uno por entrada.
+  async function saveDoc(id, bytes) { if (!dataKey) throw new Error('Bloqueado'); await put('doc:' + id, await seal(dataKey, bytes, 'doc:' + id)); }
+  async function readDoc(id) { if (!dataKey) throw new Error('Bloqueado'); const box = await get('doc:' + id); return box ? open(dataKey, box, 'doc:' + id) : null; }
+  const delDoc = (id) => del('doc:' + id);
   function lock() { dataKey = null; }
   const isUnlocked = () => !!dataKey;
 
@@ -210,7 +214,7 @@
 
   global.Vault = {
     exists, setup, unlockWithSecret, unlockWithBio, save, lock, isUnlocked, changeSecret, verifySecret,
-    bioAvailable, enableBio, disableBio, exportBackup, importBackup, wipe, lockoutRemaining,
+    saveDoc, readDoc, delDoc, bioAvailable, enableBio, disableBio, exportBackup, importBackup, wipe, lockoutRemaining,
     get meta() { return meta; },
   };
 })(window);

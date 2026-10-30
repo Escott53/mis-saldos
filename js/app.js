@@ -1,7 +1,7 @@
 /* Mis Saldos — panel personal de patrimonio. Todo local y cifrado en el dispositivo. */
 (() => {
   'use strict';
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.1.0';
   const LOCK_AFTER_BG_MS = 60 * 1000;      // bloquear al volver tras >1 min en segundo plano
   const IDLE_LOCK_MS = 5 * 60 * 1000;      // bloquear tras 5 min sin tocar la pantalla
   const AUTO_REFRESH_MS = 15 * 60 * 1000;  // refrescar datos automáticos al desbloquear si han pasado >15 min
@@ -40,6 +40,17 @@
     return dateStr(t);
   }
   const parseAmount = (v) => window.Degiro.parseNum(v);
+  let mxnFmt;
+  try { mxnFmt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'MXN', useGrouping: 'always' }); mxnFmt.format(1); }
+  catch (_) { mxnFmt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'MXN' }); }
+  const mxn = (v, force) => (v == null || !Number.isFinite(v)) ? '—' : (hidden() && !force ? '•••••• MXN' : mxnFmt.format(v));
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  function addMonths(ymd, n) {
+    const [y, m, d] = ymd.split('-').map(Number); const t = new Date(y, m - 1 + n, 1);
+    const last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+  }
 
   // ---------- Paletas y cuentas predefinidas ----------
   const COLORS = {
@@ -53,6 +64,7 @@
     degiro: { name: 'DEGIRO', emoji: '📈', color: 'degiro', link: 'https://trader.degiro.nl', sub: 'Bróker · acciones y ETF' },
     mapfre: { name: 'Mapfre', emoji: '🛡️', color: 'mapfre', link: 'https://www.mapfre.es/particulares/area-clientes/', sub: 'Seguros de ahorro · planes' },
     horos: { name: 'Horos AM', emoji: '🦉', color: 'horos', link: 'https://horosam.com/portal/#/login', sub: 'Fondos de inversión · pensiones' },
+    terreno: { name: 'Terreno', emoji: '🌴', color: 'esmeralda', link: '', sub: 'Terreno en pagos · MXN · fuera del total' },
   };
   function newAccount(type) {
     const b = BUILTIN[type];
@@ -61,6 +73,7 @@
     if (type === 'degiro') return { ...base, source: null, manual: null, manualAt: null, positions: [], csvTotal: null, csvAt: null, csvName: '' };
     if (type === 'mapfre') return { ...base, products: [], history: [] };
     if (type === 'horos') return { ...base, funds: [] };
+    if (type === 'terreno') return { ...base, currency: 'MXN', plot: {}, price: null, plan: {}, payments: [], statement: null, terms: [], docs: [] };
   }
   const defaultData = () => ({ v: 1, settings: { hide: false, range: '3M' }, accounts: ['ledger', 'degiro', 'mapfre', 'horos'].map(newAccount), snapshots: [], prices: {}, lastRefresh: 0 });
 
@@ -90,11 +103,34 @@
       default: return a.balance ?? null;
     }
   }
-  const total = () => S.accounts.reduce((s, a) => s + (balanceOf(a) || 0), 0);
+  // El terreno (MXN, aún en pago) se muestra aparte y no se suma al patrimonio en euros.
+  const inTotal = (a) => a.type !== 'terreno';
+  const total = () => S.accounts.filter(inTotal).reduce((s, a) => s + (balanceOf(a) || 0), 0);
+
+  function terrInfo(a) {
+    const pays = (a.payments || []).slice().sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
+    const paid = r2(pays.reduce((s, p) => s + (p.amount || 0), 0));
+    const price = a.price != null ? a.price : null;
+    const pending = price != null ? r2(Math.max(0, price - paid)) : null;
+    const pctPaid = price ? Math.min(100, paid / price * 100) : 0;
+    const p = a.plan || {}; let next = null;
+    if (pending > 0.005 && p.installment && p.firstDue) {
+      const toInst = paid - (p.downPayment || 0);
+      if (toInst < -0.005) next = { date: p.downDue || null, amount: r2(-toInst), label: 'Resto del enganche' };
+      else {
+        const n = Math.floor((toInst + 0.005) / p.installment);
+        next = { date: addMonths(p.firstDue, n), amount: r2(Math.min(pending, p.installment - (toInst - n * p.installment))), label: `Mensualidad ${n + 1}${p.nInstallments ? ' de ' + p.nInstallments : ''}`, covered: n };
+      }
+    }
+    const remInst = p.installment && pending != null ? Math.ceil((pending - 0.01) / p.installment) : null;
+    let run = price;
+    const rows = pays.map((x) => { if (run != null) run = r2(run - x.amount); return { ...x, after: run }; });
+    return { pays, rows, paid, price, pending, pctPaid, next, remInst };
+  }
 
   function recordSnapshot() {
     const t = Date.now();
-    const by = {}; S.accounts.forEach((a) => { const b = balanceOf(a); if (b != null) by[a.id] = Math.round(b * 100) / 100; });
+    const by = {}; S.accounts.filter(inTotal).forEach((a) => { const b = balanceOf(a); if (b != null) by[a.id] = Math.round(b * 100) / 100; });
     const snap = { t, total: Math.round(total() * 100) / 100, by };
     const last = S.snapshots[S.snapshots.length - 1];
     if (last && Math.abs(last.total - snap.total) < 0.005) { last.t = t; last.by = by; return; }
@@ -281,6 +317,7 @@
     if (!location.hash || location.hash === '#') history.replaceState(null, '', '#/');
     render();
     armIdle();
+    maybeTerrImport();
     if (fromUnlock && Date.now() - (S.lastRefresh || 0) > AUTO_REFRESH_MS && hasAutoSources()) refreshAll(true);
   }
 
@@ -312,7 +349,7 @@
     if (m && acc(m[1])) renderAccount(acc(m[1]));
     else renderHome();
   }
-  window.addEventListener('hashchange', () => { if (S) { closeSheet(true); render(); window.scrollTo(0, 0); } });
+  window.addEventListener('hashchange', () => { if (captureTerrLink()) { if (S) { render(); maybeTerrImport(); } return; } if (S) { closeSheet(true); render(); window.scrollTo(0, 0); } });
 
   function greeting() { const h = new Date().getHours(); return h < 6 ? 'Buenas noches' : h < 13 ? 'Buenos días' : h < 21 ? 'Buenas tardes' : 'Buenas noches'; }
 
@@ -360,6 +397,7 @@
       case 'degiro': return a.source === 'csv' ? `${a.positions.filter((p) => !p.cash).length} posiciones · CSV` : a.source === 'manual' ? 'Saldo manual' : 'Importa el CSV o introduce el saldo';
       case 'mapfre': return a.products.length ? `${a.products.length} producto${a.products.length > 1 ? 's' : ''}` : 'Sin productos · toca para añadir';
       case 'horos': { if (!a.funds.length) return 'Sin fondos · toca para añadir'; const d = a.funds.map((f) => f.navDate).filter(Boolean).sort().pop(); return `${a.funds.length} fondo${a.funds.length > 1 ? 's' : ''}${d ? ' · VL ' + ymdToEs(d).slice(0, 5) : ''}`; }
+      case 'terreno': { const t = terrInfo(a); if (t.price == null) return 'Toca para configurar'; return `Pagado ${Math.floor(t.pctPaid)} % · pendiente ${mxn(t.pending)}`; }
       default: return a.balance != null ? 'Saldo manual' : 'Sin saldo';
     }
   }
@@ -385,25 +423,26 @@
       </section>
       <div class="section-title"><span>Cuentas</span><span class="muted-small">${S.lastRefresh ? 'Auto: ' + ago(S.lastRefresh) : ''}</span></div>
       <div class="accounts">
-        ${withBal.map(({ a, b }, i) => { const [g1, g2] = colorOf(a); const share = T > 0 && b > 0 ? b / T * 100 : 0; return `
+        ${withBal.map(({ a, b }, i) => { const [g1, g2] = colorOf(a); const tr = a.type === 'terreno' ? terrInfo(a) : null; const share = tr ? tr.pctPaid : T > 0 && b > 0 ? b / T * 100 : 0; return `
         <article class="acc" style="--g1:${g1};--g2:${g2};--i:${i}" data-act="open-acc" data-id="${esc(a.id)}" tabindex="0" role="button" aria-label="${esc(a.name)}: ${b == null ? 'sin configurar' : eur(b)}">
           <div class="acc-top">
             <div class="acc-ico">${esc(a.emoji)}</div>
             <div class="acc-main"><div class="acc-name">${esc(a.name)}</div><div class="acc-sub">${esc(accSubtitle(a))}</div></div>
-            <div class="acc-right"><div class="acc-bal ${b == null ? 'none' : ''}">${b == null ? 'Configurar' : eur(b)}</div><div class="acc-upd">${a.updated ? esc(ago(a.updated)) : ''}</div></div>
+            <div class="acc-right"><div class="acc-bal ${b == null && !(tr && tr.price != null) ? 'none' : ''}">${tr ? (tr.price == null ? 'Configurar' : mxn(tr.paid)) : b == null ? 'Configurar' : eur(b)}</div><div class="acc-upd">${a.updated ? esc(ago(a.updated)) : ''}</div></div>
           </div>
           <div class="acc-foot">
-            <div class="share"><i style="width:${share.toFixed(1)}%"></i></div><span class="share-t">${b != null && T > 0 ? Math.round(share) + ' %' : ''}</span>
+            <div class="share"><i style="width:${share.toFixed(1)}%"></i></div><span class="share-t">${tr ? (tr.price != null ? Math.floor(share) + ' % pagado' : '') : b != null && T > 0 ? Math.round(share) + ' %' : ''}</span>
             ${a.link ? `<button class="open-app" data-act="open-app" data-id="${esc(a.id)}">Abrir app ${I.ext}</button>` : ''}
           </div>
         </article>`; }).join('')}
         <button class="acc add" data-act="add-account"><span class="plus">${I.plus}</span><span>Añadir cuenta</span></button>
       </div>
+      ${(() => { const ta = S.accounts.find((x) => x.type === 'terreno'); if (!ta) return ''; const t = terrInfo(ta); return t.price == null ? '' : `<p class="note center">🌴 El terreno no se suma al patrimonio total (MXN, en pago): pagado ${esc(mxn(t.paid))} · pendiente ${esc(mxn(t.pending))}.</p>`; })()}
       <p class="foot-note">${I.shield} Datos cifrados solo en este dispositivo</p>
     </main>`;
   }
 
-  function heroFor(a, extra = '') {
+  function heroFor(a, extra = '', balHTML = null, label = '') {
     const [g1, g2] = colorOf(a); const b = balanceOf(a);
     return `<section class="a-hero" style="--g1:${g1};--g2:${g2}">
       <div class="a-top">
@@ -414,7 +453,7 @@
         </div>
       </div>
       <div class="a-title"><div class="emoji">${esc(a.emoji)}</div><div><h2>${esc(a.name)}</h2><div class="type">${esc((BUILTIN[a.type] && BUILTIN[a.type].sub) || 'Cuenta personalizada')}</div></div></div>
-      <div class="a-bal">${b == null ? '—' : eur(b)}</div>
+      ${label ? `<div class="a-lbl">${esc(label)}</div>` : ''}<div class="a-bal">${balHTML != null ? balHTML : b == null ? '—' : eur(b)}</div>
       <div class="a-upd">${a.updated ? 'Actualizado ' + esc(ago(a.updated)) + ' · ' + esc(dtFmt.format(a.updated)) : 'Sin datos todavía'}</div>
       <div class="a-actions">${extra}${a.link ? `<button class="chip-btn" data-act="open-app" data-id="${esc(a.id)}">Abrir app ${I.ext}</button>` : ''}</div>
     </section>`;
@@ -471,6 +510,8 @@
             <div class="amt"><b>${eur(f.units != null && nav != null ? f.units * nav : null)}</b></div></div>`; }).join('') : `<div class="empty"><span class="big">🦉</span><b>Añade tus fondos de Horos</b>Indica cuántas participaciones tienes y la app calculará el valor con el último VL publicado.</div>`}</div>
         <button class="btn primary wide" data-act="add-fund">${I.plus} Añadir fondo o plan</button>
         <p class="note">Fuente del VL: horosam.com (JSON público que usa su propia web). Si falla, puedes introducir el VL a mano desde la ficha de cada fondo.</p>`;
+    } else if (a.type === 'terreno') {
+      return renderTerreno(a);
     } else {
       extra = `<button class="chip-btn" data-act="manual-balance" data-id="${esc(a.id)}">✏️ Actualizar saldo</button>`;
       const h = a.history || [];
@@ -480,6 +521,74 @@
     }
     app.innerHTML = `<main class="view detail">${heroFor(a, extra)}${body}</main>`;
   }
+
+  function renderTerreno(a) {
+    const t = terrInfo(a); const pl = a.plot || {}; const p = a.plan || {}; const st = a.statement;
+    const extra = `<button class="chip-btn" data-act="terr-pay">${I.plus} Pago</button><button class="chip-btn" data-act="terr-doc-add">📎 Documento</button><button class="chip-btn" data-act="terr-stmt">✏️ Saldo</button>`;
+    const kv = (k, v) => v == null || v === '' ? '' : `<div class="kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+    const stOk = st && st.balance != null && t.pending != null ? Math.abs(st.balance - t.pending) < 1 : null;
+    const body = `
+      <section class="terr-card">
+        <div class="terr-row"><div><small>Pagado</small><b>${mxn(t.paid)}</b></div><div class="r"><small>Precio total</small><b>${mxn(t.price)}</b></div></div>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${t.pctPaid.toFixed(1)}"><i style="width:${t.pctPaid.toFixed(2)}%"></i></div>
+        <div class="terr-row"><span class="pctb">${hidden() ? '••' : numFmt(1).format(t.pctPaid)} % pagado</span><span>Pendiente <b>${mxn(t.pending)}</b></span></div>
+        ${t.remInst != null ? `<p class="terr-hint">≈ ${t.remInst} mensualidades de ${mxn(p.installment)} por pagar${p.lastDue ? ' · última prevista ' + esc(ymdToEs(p.lastDue)) : ''}</p>` : ''}
+      </section>
+      ${t.next ? `<section class="terr-card next"><div class="terr-row"><div><small>Próximo pago según calendario</small><b>${esc(ymdToEs(t.next.date) || '—')}</b><span class="terr-hint">${esc(t.next.label)}${t.next.covered ? ` · llevas ${t.next.covered} mensualidades cubiertas` : ''}</span></div><div class="r"><small>Importe</small><b>${mxn(t.next.amount)}</b></div></div></section>` : t.price != null && t.pending <= 0.005 ? '<section class="terr-card next"><b>🎉 Terreno pagado por completo</b></section>' : ''}
+      ${st ? `<div class="info-card">🧾 <b>Último estado de cuenta (${esc(ymdToEs(st.date))})</b>: total pagado ${mxn(st.paid)} · saldo ${mxn(st.balance)}${st.overdue != null ? ' · vencido ' + mxn(st.overdue) : ''}. ${stOk === true ? '✅ Coincide con tus pagos registrados.' : stOk === false ? '⚠️ No coincide con la suma de pagos registrados: revisa.' : ''}</div>` : ''}
+      <div class="section-title"><span>Pagos (${t.rows.length})</span><span class="muted-small">saldo tras cada pago</span></div>
+      <div class="list compact">${t.rows.length ? t.rows.slice().reverse().map((x) => `
+        <div class="item hist" data-act="terr-pay-edit" data-id="${esc(x.id)}" role="button" tabindex="0"><div class="body"><div class="txt">${esc(ymdToEs(x.date))}</div><div class="sub">${esc([x.concept, x.method, x.folio ? 'folio ' + x.folio : ''].filter(Boolean).join(' · '))}</div></div>
+          <div class="amt"><b>${mxn(x.amount)}</b><small>${x.after != null ? 'queda ' + mxn(x.after) : ''}</small></div></div>`).join('') : '<div class="empty"><span class="big">🌴</span><b>Sin pagos todavía</b>Pulsa «Pago» para añadir uno o abre el enlace de importación.</div>'}
+        ${t.rows.length ? `<div class="item total-row"><div class="body"><div class="txt"><b>Total pagado</b></div></div><div class="amt"><b>${mxn(t.paid)}</b></div></div>` : ''}</div>
+      <button class="btn primary wide" data-act="terr-pay">${I.plus} Añadir pago</button>
+      <div class="section-title"><span>Documentos</span><span class="muted-small">cifrados en el móvil</span></div>
+      <div class="list compact">${(a.docs || []).length ? a.docs.map((d) => `
+        <div class="item" data-act="terr-doc" data-id="${esc(d.id)}" role="button" tabindex="0"><div class="coin sq" style="--c:#047857">${/pdf/i.test(d.mime) ? '📄' : '🖼️'}</div>
+          <div class="body"><div class="txt">${esc(d.label || d.name)}</div><div class="sub">${esc(d.name)} · ${(d.size / 1048576).toFixed(1).replace('.', ',')} MB · ${esc(dateStr(d.added))}</div></div>
+          <div class="amt"><button class="open-app" data-act="terr-doc-open" data-id="${esc(d.id)}">Abrir ${I.ext}</button></div></div>`).join('') : '<div class="empty"><span class="big">📎</span><b>Adjunta el contrato y los estados de cuenta</b>Se guardan cifrados solo en este móvil.</div>'}</div>
+      <button class="btn wide" data-act="terr-doc-add">📎 Adjuntar documento (PDF o foto)</button>
+      <input type="file" id="terr-file" accept="application/pdf,image/*" hidden>
+      <div class="section-title"><span>El terreno</span></div>
+      <section class="terr-card kvs">${kv('Desarrollo', pl.development)}${kv('Unidad / lote interno', pl.unit)}${kv('Lote', pl.lot)}${kv('Tablaje', pl.tablaje)}${kv('Subcondominio', pl.subcondo)}${kv('Ubicación', pl.location)}${kv('Superficie', pl.area)}${kv('Medidas', pl.dims)}${kv('Precio de lista', a.listPrice != null ? mxn(a.listPrice) : '')}${kv('Descuento', a.discount != null ? mxn(a.discount) + (p.discountPct ? ' (' + p.discountPct + ')' : '') : '')}${kv('Precio final', a.price != null ? mxn(a.price) : '')}${kv('Enganche', p.downPayment != null ? mxn(p.downPayment) : '')}${kv('Financiado', p.financed != null ? mxn(p.financed) : '')}${kv('Mensualidad', p.installment != null ? mxn(p.installment) + (p.nInstallments ? ' × ' + p.nInstallments : '') : '')}${kv('Día de pago', p.firstDue ? 'el ' + Number(p.firstDue.slice(8)) + ' de cada mes (desde ' + ymdToEs(p.firstDue) + ')' : '')}${kv('Escrituración', pl.deedDate)}${kv('Contrato firmado', pl.signed)}${kv('Vendedor', pl.seller)}</section>
+      ${(a.terms || []).length ? `<div class="section-title"><span>Condiciones clave del contrato</span></div><section class="terr-card"><ul class="terms">${a.terms.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></section>` : ''}
+      <p class="note">Este terreno está en pesos mexicanos y no se suma al patrimonio total en euros. Los importes proceden de tus documentos; actualízalos con cada nuevo pago o estado de cuenta.</p>`;
+    app.innerHTML = `<main class="view detail">${heroFor(a, extra, mxn(t.pending), 'Pendiente de pago')}${body}</main>`;
+  }
+
+  async function openDoc(id, share) {
+    const a = S.accounts.find((x) => x.type === 'terreno'); const d = a && a.docs.find((x) => x.id === id); if (!d) return;
+    try {
+      const bytes = await Vault.readDoc(id); if (!bytes) return toast('Documento no encontrado en este dispositivo');
+      const file = new File([bytes], d.name, { type: d.mime || 'application/octet-stream' });
+      if (share && navigator.canShare && navigator.canShare({ files: [file] })) return navigator.share({ files: [file], title: d.label || d.name }).catch(() => {});
+      const u = URL.createObjectURL(file);
+      const w = window.open(u, '_blank');
+      if (!w) { const el = document.createElement('a'); el.href = u; el.download = d.name; document.body.appendChild(el); el.click(); el.remove(); }
+      setTimeout(() => URL.revokeObjectURL(u), 120000);
+    } catch (e) { toast('No se pudo abrir: ' + e.message); }
+  }
+
+  // ---------- Enlace de importación del terreno (#importar-terreno=<base64url JSON>) ----------
+  // El fragmento nunca llega al servidor; se procesa solo tras desbloquear y se borra de la barra de direcciones.
+  let pendingTerr = null;
+  function captureTerrLink() {
+    const m = location.hash.match(/^#importar-terreno=([\w-]+)/); if (!m) return false;
+    pendingTerr = m[1]; history.replaceState(null, '', location.pathname + location.search + (S ? '#/' : '')); return true;
+  }
+  function decodeTerr(s) {
+    const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+    return JSON.parse(new TextDecoder().decode(Uint8Array.from(b, (c) => c.charCodeAt(0))));
+  }
+  function maybeTerrImport() {
+    if (!pendingTerr || !S) return;
+    let d; try { d = decodeTerr(pendingTerr); } catch (_) { pendingTerr = null; return toast('El enlace de importación no es válido'); }
+    if (!d || d.kind !== 'terreno') { pendingTerr = null; return toast('El enlace de importación no es válido'); }
+    pendingTerrData = d; pendingTerr = null;
+    openSheet(`<h3>Importar terreno</h3><p class="note">${esc((d.plot && d.plot.development) || 'Terreno')} · unidad ${esc((d.plot && d.plot.unit) || '')}: ${(d.payments || []).length} pagos, precio ${esc(mxn(d.price, true))}${d.statement ? ', estado de cuenta del ' + esc(ymdToEs(d.statement.date)) : ''}. Se sustituirán los datos del terreno (los documentos adjuntos se conservan).</p>
+      <div class="sheet-actions"><button class="btn" data-act="close-sheet">Cancelar</button><button class="btn primary" data-act="terr-import-ok">Importar</button></div>`);
+  }
+  let pendingTerrData = null;
 
   // =====================================================================
   //  ACTUALIZACIÓN AUTOMÁTICA (Ledger + Horos)
@@ -731,6 +840,34 @@
     'pick-fund': (el) => fundSheet(el.dataset.key, true),
     'edit-fund': (el) => fundSheet(el.dataset.key, false),
     'del-fund': async (el) => { const a = acc('horos'); a.funds = a.funds.filter((f) => f.key !== el.dataset.key); a.updated = Date.now(); closeSheet(); await changed(); },
+    // Terreno
+    'terr-pay': () => terrPaySheet(null),
+    'terr-pay-edit': (el) => terrPaySheet(el.dataset.id),
+    'del-terr-pay': async (el) => { const a = acc('terreno'); a.payments = a.payments.filter((x) => x.id !== el.dataset.id); a.updated = Date.now(); closeSheet(); await persist(); render(); },
+    'terr-stmt': () => { const a = acc('terreno'); const st = a.statement || {}; const v = (x) => (x != null ? esc(numFmt(2).format(x)) : '');
+      openSheet(`<h3>Estado de cuenta</h3><p class="note">Copia los datos del último estado de cuenta del promotor.</p><form data-form="terr-stmt">
+        <label class="lbl" for="ts-d">Fecha</label><input class="field" id="ts-d" name="date" type="date" value="${esc(st.date || todayYmd())}">
+        <label class="lbl" for="ts-b">Saldo pendiente (MXN)</label><input class="field big-num" id="ts-b" name="balance" inputmode="decimal" value="${v(st.balance)}" placeholder="0,00">
+        <label class="lbl" for="ts-p">Total pagado (MXN)</label><input class="field" id="ts-p" name="paid" inputmode="decimal" value="${v(st.paid)}" placeholder="0,00">
+        <label class="lbl" for="ts-o">Saldo vencido (MXN)</label><input class="field" id="ts-o" name="overdue" inputmode="decimal" value="${v(st.overdue)}" placeholder="0,00">
+        <label class="lbl" for="ts-t">Precio total del terreno (MXN)</label><input class="field" id="ts-t" name="price" inputmode="decimal" value="${v(a.price)}" placeholder="0,00">
+        <p class="lock-err form-err"></p><div class="sheet-actions"><button type="button" class="btn" data-act="close-sheet">Cancelar</button><button class="btn primary">Guardar</button></div></form>`); },
+    'terr-doc-add': () => { const inp = $('#terr-file'); if (!inp) return; inp.value = ''; inp.click(); },
+    'terr-doc-open': (el, ev) => { ev.stopPropagation(); openDoc(el.dataset.id, false); },
+    'terr-doc-share': (el) => openDoc(el.dataset.id, true),
+    'terr-doc': (el, ev) => { if (ev.target.closest('[data-act=terr-doc-open]')) return; const d = acc('terreno').docs.find((x) => x.id === el.dataset.id);
+      openSheet(`<h3>${esc(d.label || d.name)}</h3><form data-form="terr-doc" data-id="${esc(d.id)}"><label class="lbl" for="td-l">Nombre</label><input class="field" id="td-l" name="label" maxlength="60" value="${esc(d.label || '')}" placeholder="${esc(d.name)}">
+        <div class="sheet-actions"><button type="button" class="btn" data-act="terr-doc-open" data-id="${esc(d.id)}">Abrir</button><button type="button" class="btn" data-act="terr-doc-share" data-id="${esc(d.id)}">Compartir / guardar</button></div>
+        <div class="sheet-actions"><button type="button" class="btn danger-soft" data-act="del-terr-doc" data-id="${esc(d.id)}">Eliminar</button><button class="btn primary">Guardar</button></div></form>`); },
+    'del-terr-doc': async (el) => { const a = acc('terreno'); await Vault.delDoc(el.dataset.id); a.docs = a.docs.filter((x) => x.id !== el.dataset.id); closeSheet(); await persist(); render(); toast('Documento eliminado'); },
+    'terr-import-ok': async () => {
+      const d = pendingTerrData; pendingTerrData = null; if (!d) return closeSheet();
+      let a = acc('terreno'); if (!a) { a = newAccount('terreno'); S.accounts.push(a); }
+      Object.assign(a, { name: d.name || a.name, currency: 'MXN', plot: d.plot || {}, price: d.price ?? null, listPrice: d.listPrice ?? null, discount: d.discount ?? null, plan: d.plan || {}, statement: d.statement || null, terms: d.terms || [],
+        payments: (d.payments || []).map((x) => ({ id: uid(), date: x.date, amount: x.amount, method: x.method || '', folio: x.folio || '', concept: x.concept || '' })), updated: Date.now() });
+      a.docs = a.docs || [];
+      closeSheet(); await persist(); location.hash = '#/cuenta/terreno'; render(); toast('Terreno importado');
+    },
     // Ajustes
     'lock-now': () => lockNow(false),
     'change-secret': () => { const cur = Vault.meta.secretType; openSheet(`<h3>Cambiar ${cur === 'password' ? 'contraseña' : 'PIN'}</h3><form data-form="change-secret">
@@ -863,9 +1000,36 @@
       try { const data = await Vault.importBackup(pendingImport, f.pw.value); S = migrate(data); pendingImport = null; await persist(); closeSheet(); location.hash = '#/'; render(); toast('Copia restaurada'); }
       catch (e) { err(e.message); }
     },
+    'terr-pay': async (f) => {
+      const a = acc('terreno'); const v = parseAmount(f.amount.value); const date = f.date.value;
+      if (!Number.isFinite(v) || v <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { $('.form-err', f).textContent = 'Revisa la fecha y el importe'; return; }
+      let x = a.payments.find((y) => y.id === f.dataset.id); if (!x) { x = { id: uid(), concept: '' }; a.payments.push(x); }
+      Object.assign(x, { date, amount: r2(v), method: f.method.value.trim().slice(0, 30), folio: f.folio.value.trim().slice(0, 20) });
+      a.updated = Date.now(); closeSheet(); await persist(); render(); toast('Pago guardado · pendiente ' + mxn(terrInfo(a).pending, true));
+    },
+    'terr-stmt': async (f) => {
+      const a = acc('terreno'); const n = (el) => (el.value.trim() ? parseAmount(el.value) : null);
+      const bal = n(f.balance), paid = n(f.paid), od = n(f.overdue), price = n(f.price);
+      if ([bal, paid, od, price].some((x) => x != null && !Number.isFinite(x))) { $('.form-err', f).textContent = 'Algún importe no es válido'; return; }
+      a.statement = { date: f.date.value || todayYmd(), balance: bal, paid, overdue: od }; if (price != null) a.price = price;
+      a.updated = Date.now(); closeSheet(); await persist(); render(); toast('Estado de cuenta guardado');
+    },
+    'terr-doc': async (f) => { const a = acc('terreno'); const d = a.docs.find((x) => x.id === f.dataset.id); d.label = f.label.value.trim().slice(0, 60); closeSheet(); await persist(); render(); },
     wipe: async (f) => { if (f.c.value.trim().toUpperCase() !== 'BORRAR') return; S = null; await Vault.wipe(); closeSheet(true); history.replaceState(null, '', location.pathname); showLock('setup'); },
   };
   let pendingImport = null;
+
+  function terrPaySheet(id) {
+    const a = acc('terreno'); const x = id ? a.payments.find((y) => y.id === id) : null; const t = terrInfo(a);
+    const sug = x ? x.amount : (t.next ? t.next.amount : (a.plan && a.plan.installment) || null);
+    openSheet(`<h3>${x ? 'Editar pago' : 'Nuevo pago'}</h3><form data-form="terr-pay" data-id="${esc(id || '')}">
+      <label class="lbl" for="tp-d">Fecha</label><input class="field" id="tp-d" name="date" type="date" required value="${esc(x ? x.date : todayYmd())}">
+      <label class="lbl" for="amt">Importe (MXN)</label><input class="field big-num" id="amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${sug != null ? esc(numFmt(2).format(sug)) : ''}">
+      <label class="lbl" for="tp-m">Forma de pago (opcional)</label><input class="field" id="tp-m" name="method" maxlength="30" value="${esc(x ? x.method : 'Transferencia')}">
+      <label class="lbl" for="tp-f">Folio del recibo (opcional)</label><input class="field" id="tp-f" name="folio" maxlength="20" inputmode="numeric" value="${esc(x ? x.folio : '')}">
+      <p class="lock-err form-err"></p>
+      <div class="sheet-actions">${x ? `<button type="button" class="btn danger-soft" data-act="del-terr-pay" data-id="${esc(x.id)}">Eliminar</button>` : '<button type="button" class="btn" data-act="close-sheet">Cancelar</button>'}<button class="btn primary">Guardar</button></div></form>`);
+  }
 
   document.addEventListener('click', (ev) => {
     const el = ev.target.closest('[data-act]'); if (!el || el.disabled) return;
@@ -892,6 +1056,17 @@
         await changed(); toast(`Importadas ${r.positions.length} líneas · ${eur(r.total)}`);
       } catch (e) { toast(e.message); }
     }
+    if (ev.target.id === 'terr-file') {
+      const file = ev.target.files[0]; if (!file) return;
+      if (file.size > 30 * 1048576) return toast('Archivo demasiado grande (máx. 30 MB)');
+      try {
+        toast('Cifrando y guardando…');
+        const id = uid(); await Vault.saveDoc(id, new Uint8Array(await file.arrayBuffer()));
+        const a = acc('terreno'); a.docs = a.docs || [];
+        a.docs.push({ id, name: file.name.slice(0, 80), label: /contrat/i.test(file.name) ? 'Contrato firmado' : /estado|cuenta/i.test(file.name) ? 'Estado de cuenta' : /recibo/i.test(file.name) ? 'Recibo' : '', mime: file.type || 'application/pdf', size: file.size, added: Date.now() });
+        await persist(); render(); toast('Documento guardado (cifrado)');
+      } catch (e) { toast('No se pudo guardar: ' + e.message); }
+    }
     if (ev.target.id === 'import-file') {
       const file = ev.target.files[0]; if (!file) return;
       pendingImport = await file.text();
@@ -901,6 +1076,7 @@
   });
 
   // ---------- Arranque ----------
+  captureTerrLink();
   (async function boot() {
     if (!window.crypto || !crypto.subtle || !window.indexedDB) { app.innerHTML = '<p class="empty">Este navegador no soporta cifrado seguro (WebCrypto). Abre la app en HTTPS con un navegador moderno.</p>'; return; }
     showLock((await Vault.exists()) ? 'unlock' : 'setup');

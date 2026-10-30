@@ -331,3 +331,26 @@ select.field { appearance: none; -webkit-appearance: none; background-image: lin
 
 @media (max-height: 700px) { .pad { grid-template-columns: repeat(3, 68px); gap: 12px 24px; } .key { width: 68px; height: 68px; font-size: 26px; } .lock { padding-top: calc(var(--safe-t) + 24px); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* ---------- Terreno ---------- */
+.a-lbl { font-size: 12.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .8px; opacity: .85; margin-top: 14px; }
+.a-lbl + .a-bal { margin-top: 2px; }
+.terr-card { background: var(--card); border-radius: 20px; box-shadow: var(--shadow-sm); padding: 16px; margin-top: 16px; }
+.terr-card.next { background: color-mix(in srgb, #10b981 12%, var(--card)); }
+.terr-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; font-size: 13.5px; color: var(--muted); }
+.terr-row > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.terr-row .r { text-align: right; align-items: flex-end; }
+.terr-row small { font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .6px; }
+.terr-row b { color: var(--text); font-size: 18px; }
+.terr-row span b { font-size: 14px; }
+.terr-row .pctb { color: #047857; font-weight: 800; }
+.progress { height: 12px; border-radius: 99px; background: var(--card-2); overflow: hidden; margin: 14px 0 10px; }
+.progress i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #34d399, #047857); min-width: 6px; transition: width .6s cubic-bezier(.2,.8,.2,1); }
+.terr-hint { display: block; color: var(--muted); font-size: 12.5px; margin: 8px 0 0; line-height: 1.4; }
+.terr-card.kvs { padding: 6px 16px; }
+.kv { display: flex; justify-content: space-between; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--card-2); font-size: 13.5px; }
+.kv:last-child { border-bottom: 0; }
+.kv span { color: var(--muted); flex: none; max-width: 42%; }
+.kv b { text-align: right; font-weight: 700; overflow-wrap: anywhere; }
+.terms { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.5; display: flex; flex-direction: column; gap: 8px; }
+.item .amt .open-app { margin: 0; }
